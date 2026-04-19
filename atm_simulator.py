@@ -6,7 +6,7 @@ ATM simulator — улучшенная версия:
 - Главный экран: 1) регистрация 2) просмотр/выбор карт 0) выход
 - Регистрация: ввод имени/фамилии -> генерация номера/expiry/CVV -> установка PIN -> сохранение
 - Просмотр карт: список, выбор по индексу -> ввод PIN -> сессия карты
-- В сессии: 1..6 действия (баланс, пополнение, снятие, история, смена PIN, данные)
+- В сес��ии: 1..6 действия (баланс, пополнение, снятие, история, смена PIN, данные)
 - Каждое действие подтверждается (д/н). После выхода с карты при повторном входе требуется PIN.
 - Данные карт хранятся в cards.json
 """
@@ -19,6 +19,7 @@ import random
 import sys
 import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from getpass import getpass
 from typing import Dict, List, Optional, Tuple
 
@@ -113,9 +114,17 @@ def generate_card_number(existing_numbers: Optional[List[str]] = None) -> str:
             return number
 
 
-def generate_expiry() -> str:
+def generate_expiry(min_years_ahead: int = 2, max_years_ahead: int = 7) -> str:
+    """
+    Сгенерировать срок действия MM/YY, где год >= текущий год + min_years_ahead.
+    По умолчанию диапазон: now+2 .. now+7 лет.
+    """
+    now = datetime.now()
+    min_year_full = now.year + min_years_ahead
+    max_year_full = now.year + max_years_ahead
+    year_full = random.randint(min_year_full, max_year_full)
+    year = year_full % 100
     month = random.randint(1, 12)
-    year = random.randint(24, 29)
     return f"{month:02d}/{year:02d}"
 
 
@@ -199,7 +208,7 @@ def prompt_yes_no(prompt: str) -> bool:
 def show_help() -> None:
     print("\nСправка — команды и подсказки:")
     print("Главное меню:")
-    print("  1 — Зареги��трировать новую карту")
+    print("  1 — Зарегистрировать новую карту")
     print("  2 — Просмотр зарегистрированных карт")
     print("  help — Справка")
     print("  0 — Выйти")
@@ -231,20 +240,22 @@ def list_cards(data_path: str = DATA_FILE) -> List[Dict]:
 
 def read_pin(prompt: str) -> str:
     """
-    Надёжный ввод PIN: сначала пытаемся getpass(), при ошибке или EOF делаем fallback на input().
-    Возвращает введённую строку (без пробелов по краям).
-    Возвращает пустую строку если пользователь отменил ввод (ввел 'отмена' или нажал Ctrl-D/Ctrl-C).
-    Печатает короткое подтверждение после ввода, не показывая сам PIN.
+    Надёжный ввод PIN:
+    - если stdin — TTY: используем getpass (скрытый ввод);
+    - если не TTY (IDE/debugger): используем input и предупреждаем пользователя;
+    - обрабатываем EOF/Ctrl-C и слова отмены ('отмена','cancel','c');
+    - возвращаем пустую строку при отмене/ошибке.
     """
     try:
-        pin = getpass(prompt)
-    except Exception:
-        # getpass не поддерживается — используем input
-        try:
+        if sys.stdin.isatty():
+            pin = getpass(prompt)
+        else:
+            print("Внимание: в этой среде ввод PIN будет видим.")
             pin = input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            print("\nВвод PIN прерван. Возврат в меню.")
-            return ""
+    except (EOFError, KeyboardInterrupt):
+        print("\nВвод PIN прерван. Возврат в меню.")
+        return ""
+
     if pin is None:
         pin = ""
     pin = pin.strip()
@@ -254,7 +265,6 @@ def read_pin(prompt: str) -> str:
     if pin.lower() in ("отмена", "cancel", "c"):
         print("Операция отменена пользователем.")
         return ""
-    # подтверждение без вывода PIN
     print("(PIN введён)")
     return pin
 
@@ -290,10 +300,10 @@ def register_card_interactive(data_path: str = DATA_FILE) -> Dict:
         print(f"  Номер карты: {number}")
         print(f"  Срок действия: {expiry}")
         print(f"  CVV: {cvv}")
-        print("Тепе��ь задайте PIN для этой карты (4-6 цифр).")
+        print("Теперь задайте PIN для этой карты (4-6 цифр).")
 
         while True:
-            pin1 = read_pin("Задайте PIN (4-6 цифр): ")
+            pin1 = read_pin("З��дайте PIN (4-6 цифр): ")
             if not pin1:
                 print("Регистрация отменена пользователем.")
                 return {}
@@ -317,7 +327,6 @@ def register_card_interactive(data_path: str = DATA_FILE) -> Dict:
 
         rec = create_card_record(first, last, pin1, number=number, expiry=expiry, cvv=cvv, initial_balance=10000, data_path=data_path)
         print(f"\nКарта зарегистрирована: {rec.get('first_name')} {rec.get('last_name')} — {mask_card_number(rec.get('number'))}, срок {rec.get('expiry')}")
-        # Предложить открыть меню для только что созданн��й карты
         if prompt_yes_no("Открыть меню для этой карты сейчас? (д/н): "):
             atm = ATM(Card(rec['first_name'], rec['last_name'], rec['pin'], rec['number'], rec.get('expiry'), rec.get('cvv')), balance=rec.get('balance', 0), transactions=rec.get('transactions', []))
             atm.is_authenticated = True
@@ -360,7 +369,7 @@ def select_card_and_auth(data_path: str = DATA_FILE) -> Optional[Tuple[Dict, ATM
             print("Аутентификация отменена. Возврат в главное меню.")
             return None
         if atm.authenticate(entered):
-            print(f"PIN верный. Добро пожаловать, {atm.card.first_name}!")
+            print(f"PIN верный. Добро пожаловать, {atm.card.first_name}!\n")
             return rec, atm
         attempts += 1
         print(f"Неверный PIN. Осталось попыток: {MAX_PIN_ATTEMPTS - attempts}")
@@ -403,7 +412,7 @@ def session_loop(rec: Dict, atm: ATM, data_path: str = DATA_FILE) -> None:
                 continue
             print(atm.get_balance())
         elif cmd == "2":
-            if not prompt_yes_no("Подтвердите: Пополнить счёт? (д/н): "):
+            if not prompt_yes_no("Подтвердите: ��ополнить счёт? (д/н): "):
                 continue
             try:
                 amount = prompt_int("Введите сумму для пополнения (целое число): ")
